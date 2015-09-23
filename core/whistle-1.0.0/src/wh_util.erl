@@ -986,7 +986,6 @@ strip_binary(B, Cs) when is_list(Cs) ->
                 ,Cs
                ).
 
-
 strip_left_binary(<<C, B/binary>>, C) -> strip_left_binary(B, C);
 strip_left_binary(B, _) -> B.
 
@@ -996,7 +995,8 @@ strip_right_binary(<<C, B/binary>>, C) ->
         <<>> -> <<>>;
         T -> <<C, T/binary>>
     end;
-strip_right_binary(<<A, B/binary>>, C) -> <<A, (strip_right_binary(B, C))/binary>>;
+strip_right_binary(<<A, B/binary>>, C) ->
+    <<A, (strip_right_binary(B, C))/binary>>;
 strip_right_binary(<<>>, _) -> <<>>.
 
 -spec suffix_binary(binary(), binary()) -> boolean().
