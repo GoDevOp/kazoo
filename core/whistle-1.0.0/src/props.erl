@@ -277,7 +277,7 @@ encode_kv(Prefix, K, Vs) when is_list(Vs) ->
     encode_kv(Prefix, wh_util:to_binary(K), Vs, <<"[]=">>, []);
 %% if the value is a "simple" value, just encode it (url-encoded)
 encode_kv(Prefix, K, V) when is_binary(V) orelse is_number(V) ->
-    encode_kv(Prefix, K, <<"=">>, mochiweb_util:quote_plus(V));
+    encode_kv(Prefix, K, <<"=">>, wh_util:safe_urlencode(V));
 
 % key:{k1:v1, k2:v2} => key[k1]=v1&key[k2]=v2
 %% if no prefix is present, use just key to prefix the key/value pairs in the jobj
@@ -286,15 +286,36 @@ encode_kv(<<>>, K, [_|_]=Props) -> to_querystring(Props, [wh_util:to_binary(K)])
 encode_kv(Prefix, K, [_|_]=Props) -> to_querystring(Props, [Prefix, <<"[">>, wh_util:to_binary(K), <<"]">>]).
 
 -spec encode_kv(iolist() | binary(), ne_binary(), ne_binary(), string() | binary()) -> iolist().
-encode_kv(<<>>, K, Sep, V) -> [wh_util:to_binary(K), Sep, wh_util:to_binary(V)];
-encode_kv(Prefix, K, Sep, V) -> [Prefix, <<"[">>, wh_util:to_binary(K), <<"]">>, Sep, wh_util:to_binary(V)].
+encode_kv(<<>>, K, Sep, V) ->
+    [wh_util:to_binary(K), Sep, wh_util:to_binary(V)];
+encode_kv(Prefix, K, Sep, V) ->
+    [Prefix
+     ,<<"[">>, wh_util:to_binary(K), <<"]">>
+     ,Sep, wh_util:to_binary(V)
+    ].
 
 -spec encode_kv(iolist() | binary(), ne_binary(), [string()], ne_binary(), iolist()) -> iolist().
 encode_kv(Prefix, K, [V], Sep, Acc) ->
-    lists:reverse([ encode_kv(Prefix, K, Sep, mochiweb_util:quote_plus(V)) | Acc]);
+    lists:reverse(
+      [encode_kv(Prefix
+                 ,K
+                 ,Sep
+                 ,wh_util:safe_urlencode(V)
+                )
+       | Acc
+      ]);
 encode_kv(Prefix, K, [V|Vs], Sep, Acc) ->
-    encode_kv(Prefix, K, Vs, Sep, [ <<"&">>, encode_kv(Prefix, K, Sep, mochiweb_util:quote_plus(V)) | Acc]);
-encode_kv(_, _, [], _, Acc) -> lists:reverse(Acc).
+    encode_kv(Prefix
+              ,K
+              ,Vs
+              ,Sep
+              ,[<<"&">>
+                ,encode_kv(Prefix, K, Sep, wh_util:safe_urlencode(V))
+                | Acc
+               ]
+             );
+encode_kv(_, _, [], _, Acc) ->
+    lists:reverse(Acc).
 
 -spec to_log(wh_proplist()) -> 'ok'.
 to_log(Props) ->
