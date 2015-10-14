@@ -68,31 +68,47 @@ get_number_data(Number) ->
 -spec find_numbers(ne_binary(), pos_integer(), wh_proplist()) ->
                           {'ok', wh_json:object()} |
                           {'error', any()}.
-find_numbers(<<"+", Rest/binary>>, Quanity, Opts) ->
-    find_numbers(Rest, Quanity, Opts);
-find_numbers(<<"1", Rest/binary>>, Quanity, Opts) ->
-    find_numbers(Rest, Quanity, Opts);
-find_numbers(<<NPA:3/binary>>, Quanity, _) ->
-    Props = [{'areaCode', [wh_util:to_list(NPA)]}
-             ,{'maxQuantity', [wh_util:to_list(Quanity)]}],
-    case make_numbers_request('areaCodeNumberSearch', Props) of
-        {'error', _}=E -> E;
-        {'ok', Xml} ->
-            TelephoneNumbers = "/numberSearchResponse/telephoneNumbers/telephoneNumber",
-            Resp = [begin
-                        JObj = number_search_response_to_json(Number),
-                        Num = wh_json:get_value(<<"e164">>, JObj),
-                        {Num, JObj}
-                    end
-                    || Number <- xmerl_xpath:string(TelephoneNumbers, Xml)],
-            {'ok', wh_json:from_list(Resp)}
-    end;
-find_numbers(Search, Quanity, _) ->
-    NpaNxx = binary:part(Search, 0, (case size(Search) of L when L < 6 -> L; _ -> 6 end)),
-    Props = [{'npaNxx', [wh_util:to_list(NpaNxx)]}
-             ,{'maxQuantity', [wh_util:to_list(Quanity)]}
+find_numbers(<<"+", Rest/binary>>, Quantity, Opts) ->
+lager:debug(">>> 1"),
+    find_numbers(Rest, Quantity, Opts);
+find_numbers(<<"1", Rest/binary>>, Quantity, Opts) ->
+lager:debug(">>> 2"),
+    find_numbers(Rest, Quantity, Opts);
+find_numbers(<<Prefix:3/binary, _/binary>>, Quantity, _)
+  when Prefix == <<"800">>;
+       Prefix == <<"888">>;
+       Prefix == <<"877">>;
+       Prefix == <<"866">>;
+       Prefix == <<"855">>;
+       Prefix == <<"844">>
+       ->
+lager:debug(">>> 3"),
+    Props = [{areaCode, [wh_util:to_list(Prefix)]},
+            {'maxQuantity', [wh_util:to_list(erlang:max(300, Quantity))]}
             ],
-    case make_numbers_request('npaNxxNumberSearch', Props) of
+lager:debug("hi im sending shit: ~p", [Props]),
+R=do_search_by('tollfreeNumberSearch', Props),
+lager:debug(">>> 3 R ~p", [R]),
+R;
+find_numbers(<<NPA:3/binary>>, Quantity, _) ->
+lager:debug(">>> 4"),
+    Props = [{'areaCode', [wh_util:to_list(NPA)]}
+             ,{'maxQuantity', [wh_util:to_list(Quantity)]}
+            ],
+    do_search_by('areaCodeNumberSearch', Props);
+find_numbers(Search, Quantity, _) ->
+lager:debug(">>> 5"),
+    NpaNxx = binary:part(Search, 0, erlang:max(6, size(Search))),
+    Props = [{'npaNxx', [NpaNxx]}
+             ,{'maxQuantity', [wh_util:to_list(Quantity)]}
+            ],
+    do_search_by('npaNxxNumberSearch', Props).
+
+-type search_by() :: 'npaNxxNumberSearch' | 'areaCodeNumberSearch' | 'tollfreeNumberSearch'.
+-spec do_search_by(search_by(), wh_proplist()) -> {'ok', wh_json:object()} |
+                                                  {'error', any()}.
+do_search_by(Type, Props) ->
+    case make_numbers_request(Type, Props) of
         {'error', _}=E -> E;
         {'ok', Xml} ->
             TelephoneNumbers = "/numberSearchResponse/telephoneNumbers/telephoneNumber",
@@ -105,6 +121,7 @@ find_numbers(Search, Quanity, _) ->
             {'ok', wh_json:from_list(Resp)}
     end.
 
+
 -spec is_number_billable(wnm_number()) -> 'true'.
 is_number_billable(_Number) -> 'true'.
 
@@ -114,7 +131,7 @@ is_number_billable(_Number) -> 'true'.
 %% Acquire a given number from the carrier
 %% @end
 %%--------------------------------------------------------------------
--spec acquire_number/1 :: (wnm_number()) -> wnm_number().
+-spec acquire_number(wnm_number()) -> wnm_number().
 
 acquire_number(#number{dry_run='true'}=Number) -> Number;
 acquire_number(#number{auth_by=AuthBy
