@@ -164,6 +164,7 @@
           ,play_greeting_intro = 'false' :: boolean()
           ,use_person_not_available = 'false' :: boolean()
           ,not_configurable = 'false' :: boolean()
+          ,account_db :: api_binary()
          }).
 -type mailbox() :: #mailbox{}.
 
@@ -214,11 +215,10 @@ handle(Data, Call) ->
 -spec check_mailbox(mailbox(), boolean(), whapps_call:call(), non_neg_integer()) ->
                            'ok' | {'error', 'channel_hungup'}.
 
-check_mailbox(#mailbox{owner_id=OwnerId}=Box, Call) ->
+check_mailbox(Box, Call) ->
     %% Wrapper to initalize the attempt counter
     Resp = check_mailbox(Box, Call, 1),
-    AccountDb = whapps_call:account_db(Call),
-    _ = cf_util:unsolicited_owner_mwi_update(AccountDb, OwnerId),
+    _ = send_mwi_update(Box, Call),
     Resp.
 
 check_mailbox(#mailbox{owner_id=OwnerId}=Box, Call, Loop) ->
@@ -556,16 +556,13 @@ main_menu(#mailbox{is_setup='false'}=Box, Call) ->
     end;
 main_menu(Box, Call) -> main_menu(Box, Call, 1).
 
-main_menu(#mailbox{owner_id=OwnerId}, Call, Loop) when Loop > 4 ->
+main_menu(Box, Call, Loop) when Loop > 4 ->
     %% If there have been too may loops with no action from the caller this
     %% is likely a abandonded channel, terminate
-    AccountDb = whapps_call:account_db(Call),
     lager:info("entered main menu with too many invalid entries"),
-    _ = cf_util:unsolicited_owner_mwi_update(AccountDb, OwnerId),
     _ = whapps_call_command:b_prompt(<<"vm-goodbye">>, Call),
-    'ok';
-main_menu(#mailbox{owner_id=OwnerId
-                   ,keys=#keys{hear_new=HearNew
+    send_mwi_update(Box, Call);
+main_menu(#mailbox{keys=#keys{hear_new=HearNew
                                ,hear_saved=HearSaved
                                ,exit=Exit
                               }
@@ -575,7 +572,6 @@ main_menu(#mailbox{owner_id=OwnerId
 
     lager:debug("playing mailbox main menu"),
     _ = whapps_call_command:b_flush(Call),
-    AccountDb = whapps_call:account_db(Call),
 
     Messages = get_messages(Box, Call),
     New = count_messages(Messages, ?FOLDER_NEW),
@@ -596,35 +592,28 @@ main_menu(#mailbox{owner_id=OwnerId
     of
         {'error', _} ->
             lager:info("error during mailbox main menu"),
-            _ = cf_util:unsolicited_owner_mwi_update(AccountDb, OwnerId),
-            'ok';
+            send_mwi_update(Box, Call);
         {'ok', Exit} ->
             lager:info("user choose to exit voicemail menu"),
-            _ = cf_util:unsolicited_owner_mwi_update(AccountDb, OwnerId),
-            'ok';
+            send_mwi_update(Box, Call);
         {'ok', HearNew} ->
             lager:info("playing all messages in folder: ~s", [?FOLDER_NEW]),
             Folder = get_folder(Messages, ?FOLDER_NEW),
             case play_messages(Folder, New, Box, Call) of
-                'ok' ->
-                    _ = cf_util:unsolicited_owner_mwi_update(AccountDb, OwnerId),
-                    'ok';
+                'ok' -> send_mwi_update(Box, Call);
                 _Else -> main_menu(Box, Call)
             end;
         {'ok', HearSaved} ->
             lager:info("playing all messages in folder: ~s", [?FOLDER_SAVED]),
             Folder = get_folder(Messages, ?FOLDER_SAVED),
             case play_messages(Folder, Saved, Box, Call) of
-                'ok' ->
-                    _ = cf_util:unsolicited_owner_mwi_update(AccountDb, OwnerId),
-                    'ok';
+                'ok' -> send_mwi_update(Box, Call);
                 _Else ->  main_menu(Box, Call)
             end;
         _ ->
             main_menu(Box, Call, Loop + 1)
     end;
-main_menu(#mailbox{owner_id=OwnerId
-                   ,keys=#keys{hear_new=HearNew
+main_menu(#mailbox{keys=#keys{hear_new=HearNew
                                ,hear_saved=HearSaved
                                ,configure=Configure
                                ,exit=Exit
@@ -634,7 +623,6 @@ main_menu(#mailbox{owner_id=OwnerId
                   }=Box, Call, Loop) ->
     lager:debug("playing mailbox main menu"),
     _ = whapps_call_command:b_flush(Call),
-    AccountDb = whapps_call:account_db(Call),
 
     Messages = get_messages(Box, Call),
     New = count_messages(Messages, ?FOLDER_NEW),
@@ -654,28 +642,22 @@ main_menu(#mailbox{owner_id=OwnerId
     of
         {'error', _} ->
             lager:info("error during mailbox main menu"),
-            _ = cf_util:unsolicited_owner_mwi_update(AccountDb, OwnerId),
-            'ok';
+                send_mwi_update(Box, Call);
         {'ok', Exit} ->
             lager:info("user choose to exit voicemail menu"),
-            _ = cf_util:unsolicited_owner_mwi_update(AccountDb, OwnerId),
-            'ok';
+            send_mwi_update(Box, Call);
         {'ok', HearNew} ->
             lager:info("playing all messages in folder: ~s", [?FOLDER_NEW]),
             Folder = get_folder(Messages, ?FOLDER_NEW),
             case play_messages(Folder, New, Box, Call) of
-                'ok' ->
-                    _ = cf_util:unsolicited_owner_mwi_update(AccountDb, OwnerId),
-                    'ok';
+                'ok' -> send_mwi_update(Box, Call);
                 _Else -> main_menu(Box, Call)
             end;
         {'ok', HearSaved} ->
             lager:info("playing all messages in folder: ~s", [?FOLDER_SAVED]),
             Folder = get_folder(Messages, ?FOLDER_SAVED),
             case play_messages(Folder, Saved, Box, Call) of
-                'ok' ->
-                    _ = cf_util:unsolicited_owner_mwi_update(AccountDb, OwnerId),
-                    'ok';
+                'ok' -> send_mwi_update(Box, Call);
                 _Else ->  main_menu(Box, Call)
             end;
         {'ok', Configure} ->
@@ -1311,7 +1293,6 @@ system_report(Msg, Call) ->
 -spec update_mailbox(mailbox(), whapps_call:call(), ne_binary(), integer()) ->
                             'ok'.
 update_mailbox(#mailbox{mailbox_id=Id
-                        ,owner_id=OwnerId
                         ,transcribe_voicemail=MaybeTranscribe
                        }=Box, Call, MediaId, Length) ->
     Transcription = maybe_transcribe(Call, MediaId, MaybeTranscribe),
@@ -1355,8 +1336,7 @@ update_mailbox(#mailbox{mailbox_id=Id
                 lager:debug("notification error: ~p", [_E]),
                 save_meta(Length, Box, Call, MediaId)
         end,
-    _ = cf_util:unsolicited_owner_mwi_update(whapps_call:account_db(Call), OwnerId),
-    'ok'.
+    send_mwi_update(Box, Call).
 
 -spec collecting(wh_json:objects()) -> boolean().
 collecting([JObj|_]) ->
@@ -1633,6 +1613,7 @@ get_mailbox_profile(Data, Call) ->
                          wh_json:is_true(<<"use_person_not_available">>, MailboxJObj, Default#mailbox.use_person_not_available)
                      ,not_configurable=
                          wh_json:is_true(<<"not_configurable">>, MailboxJObj, 'false')
+                     ,account_db = AccountDb
                     };
         {'error', R} ->
             lager:info("failed to load voicemail box ~s, ~p", [Id, R]),
@@ -2313,3 +2294,25 @@ is_owner(Call, OwnerId) ->
         OwnerId -> 'true';
         _Else -> 'false'
     end.
+
+-spec send_mwi_update(mailbox(), whapps_call:call()) -> 'ok'.
+send_mwi_update(#mailbox{owner_id=OwnerId, mailbox_number=BoxNumber}=Box, Call) ->
+    AccountDb = whapps_call:account_db(Call),
+    _ = wh_util:spawn('cf_util', 'unsolicited_owner_mwi_update', [AccountDb, OwnerId]),
+    Messages = get_messages(Box, Call),
+    New = count_messages(Messages, ?FOLDER_NEW),
+    Saved = count_messages(Messages, ?FOLDER_SAVED),
+    _ = wh_util:spawn(fun() -> send_mwi_update(New, Saved, BoxNumber, Call) end),
+    lager:debug("sent MWI updates for vmbox ~s in account ~s (~b/~b)", [BoxNumber, whapps_call:account_id(Call), New, Saved]).
+
+-spec send_mwi_update(non_neg_integer(), non_neg_integer(), ne_binary(), whapps_call:call()) -> 'ok'.
+send_mwi_update(New, Saved, BoxNumber, Call) ->
+    Realm = whapps_call:account_realm(Call),
+    Command = [{<<"To">>, <<BoxNumber/binary, "@", Realm/binary>>}
+               ,{<<"Messages-New">>, New}
+               ,{<<"Messages-Saved">>, Saved}
+               ,{<<"Call-ID">>, whapps_call:call_id(Call)}
+               | wh_api:default_headers(?APP_NAME, ?APP_VERSION)
+              ],
+    lager:debug("updating MWI for vmbox ~s@~s (~b/~b)", [BoxNumber, Realm, New, Saved]),
+    wh_amqp_worker:cast(Command, fun wapi_presence:publish_mwi_update/1).
